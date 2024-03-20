@@ -26,6 +26,7 @@ from diffusers.pipelines.stable_diffusion_xl import StableDiffusionXLPipeline
 from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl import rescale_noise_cfg
 from diffusers.schedulers import KarrasDiffusionSchedulers
 from diffusers.utils import BaseOutput, deprecate
+from ..pipeline_utils import GaudiDiffusionPipeline
 from transformers import (
     CLIPImageProcessor,
     CLIPTextModel,
@@ -646,6 +647,13 @@ class GaudiStableDiffusionXLPipeline(GaudiDiffusionPipeline, StableDiffusionXLPi
 
             self._num_timesteps = len(timesteps)
 
+            hb_profiler = HabanaProfile(
+                warmup=profiling_warmup_steps,
+                active=profiling_steps,
+                record_shapes=False,
+            )
+            hb_profiler.start()
+
             # 8. Denoising
             num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
 
@@ -764,6 +772,8 @@ class GaudiStableDiffusionXLPipeline(GaudiDiffusionPipeline, StableDiffusionXLPi
                             step_idx = i // getattr(self.scheduler, "order", 1)
                             callback(step_idx, timestep, latents)
 
+                    hb_profiler.step()
+
                 if not output_type == "latent":
                     # Post-processing
                     # To resolve the dtype mismatch issue
@@ -779,6 +789,8 @@ class GaudiStableDiffusionXLPipeline(GaudiDiffusionPipeline, StableDiffusionXLPi
 
                 if not self.use_hpu_graphs:
                     self.htcore.mark_step()
+
+            hb_profiler.stop()
 
             speed_metrics_prefix = "generation"
             speed_measures = speed_metrics(

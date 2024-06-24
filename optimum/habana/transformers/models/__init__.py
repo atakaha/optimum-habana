@@ -117,8 +117,8 @@ from .modeling_all_models import (
 from .mpt import (
     GaudiMptForCausalLM,
     GaudiMptModel,
-    gaudi_mpt_attention_forward,
-    gaudi_mpt_block_forward,
+    GaudiMptAttention,
+    GaudiMptBlock,
 )
 from .opt import (
     GaudiOPTForCausalLM,

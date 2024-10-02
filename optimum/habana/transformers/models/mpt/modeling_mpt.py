@@ -16,7 +16,7 @@
 # Copyright (C) 2022-2023 Habana Labs, Ltd. an Intel Company
 ###############################################################################
 from typing import Optional, Tuple, Union
-
+import os
 import torch
 from torch import nn
 from torch.nn import CrossEntropyLoss
@@ -35,6 +35,7 @@ from ...modeling_attn_mask_utils import _gaudi_prepare_4d_causal_attention_mask
 
 try:
     from habana_frameworks.torch.hpex.kernels import FusedSDPA
+    import habana_frameworks.torch.hpu as ht
 except ImportError:
     print("Not using HPU fused scaled dot-product attention kernel.")
     FusedSDPA = None
@@ -67,6 +68,7 @@ class GaudiMptAttention(MptAttention):
         use_flash_attention: Optional[bool] = False,
         flash_attention_recompute: Optional[bool] = False,
         cache_idx: Optional[torch.Tensor] = None,
+        flash_attention_causal_mask: Optional[bool] = False,
     ):
         """
         Copied from MptAttention.forward: https://github.com/huggingface/transformers/blob/v4.44.1/src/transformers/models/mpt/modeling_mpt.py
@@ -76,10 +78,10 @@ class GaudiMptAttention(MptAttention):
         - add new args use_flash_attention
         - add new arg flash_attention_recompute
         - add new args cache_idx
+        - add new arg flash_attention_causal_mask
         """
 
         batch_size, seq_length = hidden_states.shape[:2]
-
         mixed_qkv = self.Wqkv(hidden_states)
         if self.clip_qkv:
             mixed_qkv = mixed_qkv.clamp(min=-self.clip_qkv, max=self.clip_qkv)
@@ -131,17 +133,43 @@ class GaudiMptAttention(MptAttention):
             position_bias = position_bias[:, position_bias_query_index:, position_bias_key_index:]
 
         if use_flash_attention and FusedSDPA:
-            import habana_frameworks.torch.hpu as ht
-
-            with ht.sdp_kernel(enable_recompute=flash_attention_recompute):
-                attn_output = FusedSDPA.apply(
-                    query_states,
-                    key_states,
-                    value_states,
-                    attention_mask * torch.finfo(query_states.dtype).min + position_bias.to(query_states.dtype),
-                    0.0,
-                    False,
-                    None,
+            if seq_length == 1:
+                # next token
+                use_recompute = True if os.getenv("QUANT_CONFIG", "") else False
+                with ht.sdp_kernel(enable_recompute=use_recompute):
+                    attn_output = FusedSDPA.apply(
+                        query_states,
+                        key_states,
+                        value_states,
+                        attention_mask * torch.finfo(query_states.dtype).min + position_bias.to(query_states.dtype),
+                        0.0,
+                        False,
+                        None
+                    )
+            else:
+                # firs token
+                if flash_attention_causal_mask:
+                    # causal masking on first token requires inputs to be of the same length
+                    with ht.sdp_kernel(enable_recompute=flash_attention_recompute):
+                        attn_output = FusedSDPA.apply(
+                            query_states,
+                            key_states,
+                            value_states,
+                            None,
+                            0.0,
+                            True,
+                            None
+                        )
+                else:
+                    with ht.sdp_kernel(enable_recompute=flash_attention_recompute):
+                        attn_output = FusedSDPA.apply(
+                            query_states,
+                            key_states,
+                            value_states,
+                            attention_mask * torch.finfo(query_states.dtype).min + position_bias.to(query_states.dtype),
+                            0.0,
+                            False,
+                            None,
                 )
 
             attn_weights = None
@@ -182,6 +210,7 @@ class GaudiMptBlock(MptBlock):
         use_flash_attention: Optional[bool] = False,
         flash_attention_recompute: Optional[bool] = False,
         cache_idx: Optional[torch.Tensor] = None,
+        flash_attention_causal_mask: Optional[bool] = False,
     ):
         """
         Copied from MptBlock.forward: https://github.com/huggingface/transformers/blob/v4.32.0/src/transformers/models/mpt/modeling_mpt.py
@@ -207,6 +236,7 @@ class GaudiMptBlock(MptBlock):
             use_flash_attention=use_flash_attention,
             flash_attention_recompute=flash_attention_recompute,
             cache_idx=cache_idx,
+            flash_attention_causal_mask=flash_attention_causal_mask,
         )
 
         hidden_states = self.resid_attn_dropout(attn_outputs) + residual
@@ -244,6 +274,7 @@ class GaudiMptModel(MptModel):
         use_flash_attention: Optional[bool] = False,
         flash_attention_recompute: Optional[bool] = False,
         cache_idx: Optional[torch.Tensor] = None,
+        flash_attention_causal_mask: Optional[bool] = False,
     ) -> Union[Tuple[torch.Tensor, ...], BaseModelOutputWithPastAndCrossAttentions]:
         """
         Copied from MptModel.forward: https://github.com/huggingface/transformers/blob/v4.32.0/src/transformers/models/mpt/modeling_mpt.py
@@ -333,6 +364,7 @@ class GaudiMptModel(MptModel):
                     use_flash_attention=use_flash_attention,
                     flash_attention_recompute=flash_attention_recompute,
                     cache_idx=cache_idx,
+                    flash_attention_causal_mask=flash_attention_causal_mask,
                 )
 
             hidden_states = outputs[0]
@@ -382,6 +414,7 @@ class GaudiMptForCausalLM(MptForCausalLM):
         cache_idx = kwargs.get("cache_idx")  # kv_cache index for slice operations
         use_flash_attention = kwargs.get("use_flash_attention", False)
         flash_attention_recompute = kwargs.get("flash_attention_recompute", False)
+        flash_attention_causal_mask = kwargs.get("flash_attention_causal_mask", False)
         # only last tokens for input_ids if past is not None
         if past_key_values is not None:
             if token_idx is None:
@@ -425,6 +458,7 @@ class GaudiMptForCausalLM(MptForCausalLM):
                 "use_flash_attention": use_flash_attention,
                 "flash_attention_recompute": flash_attention_recompute,
                 "cache_idx": cache_idx,
+                "flash_attention_causal_mask": flash_attention_causal_mask,
             }
         )
         return model_inputs
@@ -444,6 +478,7 @@ class GaudiMptForCausalLM(MptForCausalLM):
         use_flash_attention: Optional[bool] = False,
         flash_attention_recompute: Optional[bool] = False,
         cache_idx: Optional[torch.Tensor] = None,
+        flash_attention_causal_mask: Optional[bool] = False,
     ) -> Union[Tuple[torch.Tensor], CausalLMOutputWithCrossAttentions]:
         """
         Inherits from MptForCausalLM: https://github.com/huggingface/transformers/blob/v4.32.0/src/transformers/models/mpt/modeling_mpt.py
@@ -468,6 +503,7 @@ class GaudiMptForCausalLM(MptForCausalLM):
             use_flash_attention=use_flash_attention,
             flash_attention_recompute=flash_attention_recompute,
             cache_idx=cache_idx,
+            flash_attention_causal_mask=flash_attention_causal_mask,
         )
         hidden_states = transformer_outputs[0]
 

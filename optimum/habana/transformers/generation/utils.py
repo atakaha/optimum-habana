@@ -22,7 +22,13 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Un
 
 import torch
 import torch.distributed as dist
-from transformers.cache_utils import Cache, DynamicCache, EncoderDecoderCache, OffloadedCache, QuantizedCacheConfig
+from transformers.cache_utils import (
+    Cache,
+    DynamicCache,
+    EncoderDecoderCache,
+    OffloadedCache,
+    QuantizedCacheConfig
+)
 from transformers.generation.beam_constraints import DisjunctiveConstraint, PhrasalConstraint
 from transformers.generation.beam_search import BeamScorer, BeamSearchScorer, ConstrainedBeamSearchScorer
 from transformers.generation.candidate_generator import (
@@ -176,7 +182,7 @@ class GaudiGenerationMixin(GenerationMixin):
         x = torch.zeros((batch_size, max_steps), device=device, dtype=dtype)
         return x.index_fill(1, torch.tensor(0), 1)  # First the position with pad_token_id
 
-    def _prepare_decoder_input_ids_for_generation(
+    def __prepare_decoder_input_ids_for_generation(
         self,
         batch_size: int,
         model_input_name: str,
@@ -189,6 +195,7 @@ class GaudiGenerationMixin(GenerationMixin):
         """Prepares `decoder_input_ids` for generation with encoder-decoder models"""
         # 1. Check whether the user has defined `decoder_input_ids` manually. To facilitate in terms of input naming,
         # we also allow the user to pass it under `input_ids`, if the encoder does not use it as the main input.
+        # print("-> _prepare_decoder_input_ids_for_generation")
         if model_kwargs is not None and "decoder_input_ids" in model_kwargs:
             decoder_input_ids = model_kwargs.pop("decoder_input_ids")
         elif "input_ids" in model_kwargs and model_input_name != "input_ids":
@@ -275,7 +282,7 @@ class GaudiGenerationMixin(GenerationMixin):
                         dim=-1,
                     )
                     model_kwargs["decoder_attention_mask"] = decoder_attention_mask
-
+        # print(f"--> decoder_input_ids {decoder_input_ids}, model_kwargs {model_kwargs}")
         return decoder_input_ids, model_kwargs
 
     @staticmethod
@@ -293,7 +300,9 @@ class GaudiGenerationMixin(GenerationMixin):
         """
         # Do not call torch.repeat_interleave if expand_size is 1 because it clones
         # the input tensor and thus requires more memory although no change is applied
+        # print("->  _expand_inputs_for_generation")
         if expand_size == 1:
+            # print(f"--> 1 input_ids {input_ids}, model_kwargs {model_kwargs}")
             return input_ids, model_kwargs
 
         def _expand_dict_for_generation(dict_to_expand):
@@ -318,7 +327,7 @@ class GaudiGenerationMixin(GenerationMixin):
             if model_kwargs.get("encoder_outputs") is None:
                 raise ValueError("If `is_encoder_decoder` is True, make sure that `encoder_outputs` is defined.")
             model_kwargs["encoder_outputs"] = _expand_dict_for_generation(model_kwargs["encoder_outputs"])
-
+        # print(f"--> 2 input_ids {input_ids}, model_kwargs {model_kwargs}")
         return input_ids, model_kwargs
 
     def _pad_past_key_values(self, model_kwargs):
@@ -396,13 +405,22 @@ class GaudiGenerationMixin(GenerationMixin):
             # update attention mask
             if "attention_mask" in model_kwargs:
                 attention_mask = model_kwargs["attention_mask"]
+                # print(f"---> 1 attention_mask {attention_mask.shape}")
+                '''
                 if token_idx is not None:
                     attention_mask.index_fill_(1, token_idx, 1)
                 else:
                     attention_mask = torch.cat(
                         [attention_mask, attention_mask.new_ones((attention_mask.shape[0], 1))], dim=-1
                     )
+                    print(f"---> 2 attention_mask {attention_mask.shape}")
+                '''
+                attention_mask = torch.cat(
+                    [attention_mask, attention_mask.new_ones((attention_mask.shape[0], 1))], dim=-1
+                )
+
                 model_kwargs["attention_mask"] = attention_mask
+                # print(f"---> 3 attention_mask {attention_mask.shape}")
         else:
             # update decoder attention mask
             if "decoder_attention_mask" in model_kwargs:
@@ -509,6 +527,8 @@ class GaudiGenerationMixin(GenerationMixin):
 
         if "token_idx" not in model_kwargs:
             model_kwargs["token_idx"] = torch.tensor(params["token_idx"], device=self.device)
+        # print(f"-> update_model_kwargs_for_bucketing")
+        # print(f"--> 1 input_ids {input_ids}, model_kwargs {model_kwargs}")
         return input_ids, model_kwargs
 
     def _get_candidate_generator(
@@ -820,9 +840,14 @@ class GaudiGenerationMixin(GenerationMixin):
             elif generation_config.cache_implementation == "offloaded":
                 model_kwargs[cache_name] = OffloadedCache()
 
-        # Use tuples by default (.i.e. legacy format).
+        # Use DynamicCache() instance by default. This will avoid back and forth from legacy format that
+        # keeps copying the cache thus using much more memory
         else:
-            return
+            model_kwargs[cache_name] = (
+                DynamicCache()
+                if not requires_cross_attention_cache
+                else EncoderDecoderCache(DynamicCache(), DynamicCache())
+            )
 
     @torch.no_grad()
     def generate(

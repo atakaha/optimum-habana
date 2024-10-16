@@ -282,7 +282,7 @@ class GaudiGenerationMixin(GenerationMixin):
                         dim=-1,
                     )
                     model_kwargs["decoder_attention_mask"] = decoder_attention_mask
-        # print(f"--> decoder_input_ids {decoder_input_ids}, model_kwargs {model_kwargs}")
+        # print(f"--> __prepare_decoder_input_ids_for_generation\ndecoder_input_ids {decoder_input_ids}, model_kwargs {model_kwargs}")
         return decoder_input_ids, model_kwargs
 
     @staticmethod
@@ -302,7 +302,7 @@ class GaudiGenerationMixin(GenerationMixin):
         # the input tensor and thus requires more memory although no change is applied
         # print("->  _expand_inputs_for_generation")
         if expand_size == 1:
-            # print(f"--> 1 input_ids {input_ids}, model_kwargs {model_kwargs}")
+            # print(f"--> _expand_inputs_for_generation\n1 input_ids {input_ids}, model_kwargs {model_kwargs}")
             return input_ids, model_kwargs
 
         def _expand_dict_for_generation(dict_to_expand):
@@ -327,7 +327,7 @@ class GaudiGenerationMixin(GenerationMixin):
             if model_kwargs.get("encoder_outputs") is None:
                 raise ValueError("If `is_encoder_decoder` is True, make sure that `encoder_outputs` is defined.")
             model_kwargs["encoder_outputs"] = _expand_dict_for_generation(model_kwargs["encoder_outputs"])
-        # print(f"--> 2 input_ids {input_ids}, model_kwargs {model_kwargs}")
+        # print(f"--> _expand_inputs_for_generation\n2 input_ids {input_ids}, model_kwargs {model_kwargs}")
         return input_ids, model_kwargs
 
     def _pad_past_key_values(self, model_kwargs):
@@ -385,6 +385,7 @@ class GaudiGenerationMixin(GenerationMixin):
 
         Adds support for `token_idx`, which is necessary for using static shapes.
         """
+        # print("-> in _update_model_kwargs_for_generation")
         # mark to identify starting from second token
         model_kwargs["first_token"] = False
         if not model_kwargs.get("pad_done", False):
@@ -405,23 +406,15 @@ class GaudiGenerationMixin(GenerationMixin):
             # update attention mask
             if "attention_mask" in model_kwargs:
                 attention_mask = model_kwargs["attention_mask"]
-                # print(f"---> 1 attention_mask {attention_mask.shape}")
-                '''
-                if token_idx is not None:
-                    attention_mask.index_fill_(1, token_idx, 1)
-                else:
-                    attention_mask = torch.cat(
-                        [attention_mask, attention_mask.new_ones((attention_mask.shape[0], 1))], dim=-1
-                    )
-                    print(f"---> 2 attention_mask {attention_mask.shape}")
-                '''
+                # print(f"--> 1 attention_mask {attention_mask.shape}")
                 attention_mask = torch.cat(
                     [attention_mask, attention_mask.new_ones((attention_mask.shape[0], 1))], dim=-1
                 )
 
                 model_kwargs["attention_mask"] = attention_mask
-                # print(f"---> 3 attention_mask {attention_mask.shape}")
+                # print(f"--> 2 attention_mask {attention_mask.shape}")
         else:
+            # print("--> 3 is_encoder_decoder:")
             # update decoder attention mask
             if "decoder_attention_mask" in model_kwargs:
                 decoder_attention_mask = model_kwargs["decoder_attention_mask"]
@@ -527,8 +520,7 @@ class GaudiGenerationMixin(GenerationMixin):
 
         if "token_idx" not in model_kwargs:
             model_kwargs["token_idx"] = torch.tensor(params["token_idx"], device=self.device)
-        # print(f"-> update_model_kwargs_for_bucketing")
-        # print(f"--> 1 input_ids {input_ids}, model_kwargs {model_kwargs}")
+        # print(f"--> update_model_kwargs_for_bucketing\n1 input_ids {input_ids}, model_kwargs {model_kwargs}")
         return input_ids, model_kwargs
 
     def _get_candidate_generator(
@@ -617,10 +609,13 @@ class GaudiGenerationMixin(GenerationMixin):
                     "Please refer to the documentation for more information. "
                     "(https://huggingface.co/docs/transformers/main/en/main_classes/text_generation)"
                 )
+            '''
             if has_token_idx:
                 generation_config.max_length = input_ids_length
             else:
                 generation_config.max_length = generation_config.max_new_tokens + input_ids_length
+            '''
+            generation_config.max_length = generation_config.max_new_tokens + input_ids_length
 
         # if both `inputs_embeds` and `input_ids` are passed, we do not correct the length
         # otherwise we need total length [inputs-embeds-len + new-tokens-len] to not go beyond indicated `max_length``
@@ -658,11 +653,13 @@ class GaudiGenerationMixin(GenerationMixin):
         self, generation_config: Optional[GaudiGenerationConfig], **kwargs: Dict
     ) -> Tuple[GaudiGenerationConfig, Dict]:
         """
-        Copied from https://github.com/huggingface/transformers/blob/v4.40.2/src/transformers/generation/utils.py#L1230
+        Copied from https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/generation/utils.py#L1230
         Differences:
         - add management of `static_shapes` and `ignore_eos` in the generation config
         - workaround for `token_type_ids` for Falcon
         """
+        # print("--> _prepare_generation_config()")
+        # print(f"---> 1 kwargs\n{kwargs}")
         # TODO joao: when we can detect `fullgraph=True` in `torch.compile` (https://github.com/pytorch/pytorch/pull/120400)
         # replace `is_torchdynamo_compiling` by the corresponding check. As it is, we are being too restrictive with
         # the parameterization in `fullgraph=False` so as to enable `fullgraph=True`.
@@ -713,6 +710,7 @@ class GaudiGenerationMixin(GenerationMixin):
                 generation_config.ignore_eos = kwargs.get("ignore_eos", kwargs.get("lazy_mode", None))
             self.generation_config.ignore_eos = generation_config.ignore_eos
             model_kwargs = generation_config.update(**kwargs)  # All unused kwargs must be model kwargs
+            # print(f"---> 2 model_kwargs\n{model_kwargs}")
             if self.config.model_type == "falcon" and "token_type_ids" in kwargs.keys():
                 for key in ["token_type_ids"]:
                     model_kwargs.pop(key, None)
@@ -728,6 +726,7 @@ class GaudiGenerationMixin(GenerationMixin):
                     generation_config.decoder_start_token_id = self.generation_config.decoder_start_token_id
         else:
             model_kwargs = kwargs
+            # print(f"---> 3 model_kwargs\n{model_kwargs}")
 
         return generation_config, model_kwargs
 
@@ -960,6 +959,7 @@ class GaudiGenerationMixin(GenerationMixin):
                     - [`transformers.generation.GenerateEncoderDecoderOutput`],
                     - [`transformers.generation.GenerateBeamEncoderDecoderOutput`]
         """
+        # print("=========== enter generate ===================")
         if iteration_times is not None:
             hb_gen_time = HabanaGenerationtime(iteration_times=iteration_times)
             hb_gen_time.start()
@@ -980,6 +980,8 @@ class GaudiGenerationMixin(GenerationMixin):
             )
         num_virtual_tokens = kwargs.pop("num_virtual_tokens", 0)
         generation_config, model_kwargs = self._prepare_generation_config(generation_config, **kwargs)
+        # print(f"*** 1 model_kwargs\n{model_kwargs}")
+
         self._validate_model_kwargs(model_kwargs.copy())
         self._validate_assistant(assistant_model)
 
@@ -1001,6 +1003,7 @@ class GaudiGenerationMixin(GenerationMixin):
         inputs_tensor, model_input_name, model_kwargs = self._prepare_model_inputs(
             inputs, generation_config.bos_token_id, model_kwargs
         )
+        # print(f"---> 1 inputs_tensor : {inputs_tensor}")
         batch_size = inputs_tensor.shape[0]
 
         device = inputs_tensor.device
@@ -1114,13 +1117,16 @@ class GaudiGenerationMixin(GenerationMixin):
                             (0, 0, 0, generation_config.max_new_tokens),
                             value=generation_config.pad_token_id,
                         )
+                    '''
                     else:
                         inputs_tensor = torch.nn.functional.pad(
                             inputs_tensor, (0, generation_config.max_new_tokens), value=generation_config.pad_token_id
                         )
+                        print(f"---> 2 inputs_tensor : {inputs_tensor}")
+                    '''
                     model_kwargs["token_idx"] = torch.tensor(token_idx, device=inputs_tensor.device)
                     model_kwargs["token_idx_cpu"] = token_idx
-
+                    '''
                     for other_inputs in ["attention_mask", "token_type_ids"]:
                         if model_kwargs.get(other_inputs) is not None:
                             model_kwargs[other_inputs] = torch.nn.functional.pad(
@@ -1128,6 +1134,8 @@ class GaudiGenerationMixin(GenerationMixin):
                                 (0, generation_config.max_new_tokens),
                                 value=0,
                             )
+                    '''
+                    # print(f"mdel_kwargs\n{model_kwargs}")
             else:
                 assert generation_config.bucket_size <= 0, "Untested path for bucket>0"
                 token_idx = 1
@@ -1162,6 +1170,9 @@ class GaudiGenerationMixin(GenerationMixin):
                 max_new_tokens=generation_config.max_new_tokens,
                 pad_token_id=generation_config.pad_token_id,
             )
+            # print(f"---> generate 1")
+            # print(f"input_ids    : {input_ids}")
+            # print(f"model_kwargs : {model_kwargs}")
         else:
             input_ids = inputs_tensor if model_input_name == "input_ids" else model_kwargs.pop("input_ids")
             if model_input_name == "inputs_embeds" and generation_config.static_shapes:
@@ -1169,6 +1180,9 @@ class GaudiGenerationMixin(GenerationMixin):
                     input_ids = torch.nn.functional.pad(
                         input_ids, (0, generation_config.max_new_tokens), value=generation_config.pad_token_id
                     )
+            # print(f"---> generate 2")
+            # print(f"input_ids    : {input_ids}")
+            # print(f"model_kwargs : {model_kwargs}")
 
         if generation_config.token_healing:
             input_ids = self.heal_tokens(input_ids, tokenizer)
@@ -1189,6 +1203,9 @@ class GaudiGenerationMixin(GenerationMixin):
             input_ids_length=input_ids_length,
             has_token_idx="token_idx" in model_kwargs,
         )
+        # print(f"---> generate 3")
+        # print(f"input_ids    : {input_ids}")
+        # print(f"model_kwargs : {model_kwargs}")
 
         # If the model supports `num_logits_to_keep` in forward(), set it to 1 to avoid computing the whole
         # logit matrix. This can save a lot of memory during the first forward pass. Note that assisted decoding
@@ -1418,14 +1435,16 @@ class GaudiGenerationMixin(GenerationMixin):
 
         elif generation_mode in (GenerationMode.SAMPLE, GenerationMode.GREEDY_SEARCH):
             # 11. expand input_ids with `num_return_sequences` additional sequences per batch
+            # print(f"==> generate() 14")
+            # print(f"===> 1 model_kwargs\n{model_kwargs}")
             input_ids, model_kwargs = self._expand_inputs_for_generation(
                 input_ids=input_ids,
                 expand_size=generation_config.num_return_sequences,
                 is_encoder_decoder=self.config.is_encoder_decoder,
                 **model_kwargs,
             )
-
             # 12. run sample (it degenerates to greedy search when `generation_config.do_sample=False`)
+            # print(f"===> 2 model_kwargs\n{model_kwargs}")
             result = self._sample(
                 input_ids,
                 logits_processor=prepared_logits_processor,
@@ -1441,7 +1460,7 @@ class GaudiGenerationMixin(GenerationMixin):
                 profiling_record_shapes=profiling_record_shapes,
                 **model_kwargs,
             )
-
+            # print(f"===> 3 model_kwargs\n{model_kwargs}")
         elif generation_mode in (GenerationMode.BEAM_SAMPLE, GenerationMode.BEAM_SEARCH):
             # 11. prepare beam search scorer
             beam_scorer = BeamSearchScorer(
@@ -1587,7 +1606,7 @@ class GaudiGenerationMixin(GenerationMixin):
                 profiling_record_shapes=profiling_record_shapes,
                 **model_kwargs,
             )
-
+        # print(f"--> generate() 18")
         # Convert to legacy cache format if requested
         if (
             generation_config.return_legacy_cache is not False  # Should check for `True` after v4.47
@@ -1597,6 +1616,7 @@ class GaudiGenerationMixin(GenerationMixin):
             and result.past_key_values.to_legacy_cache is not None
         ):
             # handle BC (convert by default if he user hasn't passed a cache AND the cache is of the default type)
+            # print(f"--> generate 19")
             should_convert_cache = generation_config.return_legacy_cache
             is_user_defined_cache = user_defined_cache is not None
             is_default_cache_type = (
@@ -1616,7 +1636,7 @@ class GaudiGenerationMixin(GenerationMixin):
                 should_convert_cache = True
             if should_convert_cache:
                 result.past_key_values = result.past_key_values.to_legacy_cache()
-
+        # print(f"--> generate 20")
         return result
 
     def _dola_decoding(
@@ -1967,7 +1987,6 @@ class GaudiGenerationMixin(GenerationMixin):
                         next_model_inputs = self.prepare_inputs_for_generation(
                             top_k_ids[:, i].view(-1, 1), **model_kwargs
                         )
-
                     outputs = self(
                         **next_model_inputs,
                         return_dict=True,
@@ -1995,7 +2014,6 @@ class GaudiGenerationMixin(GenerationMixin):
                     )
                 else:
                     next_model_inputs = self.prepare_inputs_for_generation(top_k_ids.view(-1, 1), **model_kwargs)
-
                 outputs = self(
                     **next_model_inputs,
                     return_dict=True,
@@ -2134,6 +2152,7 @@ class GaudiGenerationMixin(GenerationMixin):
 
             if streamer is not None:
                 streamer.put(next_tokens.cpu())
+
             model_kwargs = self._update_model_kwargs_for_generation(
                 outputs,
                 model_kwargs,
@@ -2325,6 +2344,7 @@ class GaudiGenerationMixin(GenerationMixin):
             `model.config.is_encoder_decoder=True`.
 
         """
+        # print("-> _sample()")
         # init values
         pad_token_id = generation_config._pad_token_tensor
         output_attentions = generation_config.output_attentions
@@ -2405,6 +2425,8 @@ class GaudiGenerationMixin(GenerationMixin):
             hpu_graphs_kwargs = self._get_hpu_graphs_kwargs(model_kwargs)
 
             # forward pass to get next token
+            # print("--> def _sample()")
+            # print(f"model_inputs :\n{model_inputs}")
             outputs = self(
                 **model_inputs,
                 return_dict=True,
@@ -2486,7 +2508,7 @@ class GaudiGenerationMixin(GenerationMixin):
 
             if streamer is not None:
                 streamer.put(next_tokens.cpu())
-
+            # print("--> _sampe() ->  _update_model_kwargs_for_generation")
             model_kwargs = self._update_model_kwargs_for_generation(
                 outputs,
                 model_kwargs,
@@ -2867,6 +2889,7 @@ class GaudiGenerationMixin(GenerationMixin):
                 outputs = stack_model_outputs(outputs_per_sub_batch, self.config.get_text_config())
             else:
                 hpu_graphs_kwargs = self._get_hpu_graphs_kwargs(model_kwargs)
+
                 outputs = self(
                     **model_inputs,
                     return_dict=True,
@@ -3008,7 +3031,6 @@ class GaudiGenerationMixin(GenerationMixin):
                 )
             else:
                 input_ids = torch.cat([input_ids[beam_idx, :], beam_next_tokens.unsqueeze(-1)], dim=-1)
-
             model_kwargs = self._update_model_kwargs_for_generation(
                 outputs,
                 model_kwargs,
@@ -3405,6 +3427,7 @@ class GaudiGenerationMixin(GenerationMixin):
                 )
             else:
                 input_ids = torch.cat([input_ids[beam_idx, :], beam_next_tokens.unsqueeze(-1)], dim=-1)
+
             model_kwargs = self._update_model_kwargs_for_generation(
                 outputs,
                 model_kwargs,

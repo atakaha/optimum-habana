@@ -2427,6 +2427,8 @@ class GaudiGenerationMixin(GenerationMixin):
             # forward pass to get next token
             # print("--> def _sample()")
             # print(f"model_inputs :\n{model_inputs}")
+            # print(f"oututs tokne_idx : {token_idx}")
+            # print(f"       input_ids : {input_ids}")
             outputs = self(
                 **model_inputs,
                 return_dict=True,
@@ -2505,6 +2507,8 @@ class GaudiGenerationMixin(GenerationMixin):
                 input_ids.index_copy_(1, idx, next_tokens.unsqueeze(-1) if next_tokens.dim() == 1 else next_tokens)
             else:
                 input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
+
+            input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
 
             if streamer is not None:
                 streamer.put(next_tokens.cpu())

@@ -855,7 +855,7 @@ class GaudiMistralForCausalLM(MistralForCausalLM):
                 "use_cache": use_cache,
                 "attention_mask": attention_mask,
                 "token_idx": token_idx,
-                "reuse_cache": kwargs.get("reuse_cache"),
+                "reuse_cache": reuse_cache,
                 "trim_logits": kwargs.get("trim_logits"),
                 "cache_idx": kwargs.get("cache_idx"),
                 "attn_softmax_bf16": kwargs.get("attn_softmax_bf16"),

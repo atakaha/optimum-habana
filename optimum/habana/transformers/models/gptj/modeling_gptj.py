@@ -70,7 +70,7 @@ class KVCache(torch.nn.Module):
 
 class GaudiGPTJAttention(GPTJAttention):
     def __init__(self, config: GPTJConfig, layer_idx=None):
-        super().__init__(config)
+        super().__init__(config, layer_idx)
         self.config = config
 
         max_positions = config.max_position_embeddings
@@ -275,8 +275,8 @@ class GaudiGPTJBlock(GPTJBlock):
     Inherits from GPTJBlock: https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/gptj/modeling_gptj.py#291
     """
 
-    def __init__(self, config: GPTJConfig, layer_idx=None):
-        super().__init__(config, layer_idx=None)
+    def __init__(self, config: GPTJConfig, layer_idx: int):
+        super(GPTJBlock, self).__init__()
         inner_dim = config.n_inner if config.n_inner is not None else 4 * config.n_embd
         self.ln_1 = torch.nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
         self.attn = GaudiGPTJAttention(config, layer_idx)

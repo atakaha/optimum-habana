@@ -325,9 +325,11 @@ def main():
     sdxl_models = ["stable-diffusion-xl", "sdxl"]
     sd3_models = ["stable-diffusion-3", "sd3"]
     flux_models = ["FLUX.1", "flux"]
+    qwen_models = ["Qwen-Image", "qwen"]
     sdxl = True if any(model in args.model_name_or_path for model in sdxl_models) else False
     sd3 = True if any(model in args.model_name_or_path for model in sd3_models) else False
     flux = True if any(model in args.model_name_or_path for model in flux_models) else False
+    qwen = True if any(model in args.model_name_or_path for model in qwen_models) else False
     controlnet = True if args.control_image is not None else False
     inpainting = True if (args.base_image is not None) and (args.mask_image is not None) else False
 
@@ -402,7 +404,7 @@ def main():
                 negative_prompts = negative_prompt
     kwargs_call["negative_prompt"] = negative_prompts
 
-    if sdxl or sd3 or flux:
+    if sdxl or sd3 or flux or qwen:
         prompts_2 = args.prompts_2
         if args.distributed and args.prompts_2 is not None:
             with distributed_state.split_between_processes(args.prompts_2) as prompt_2:
@@ -545,6 +547,21 @@ def main():
             from optimum.habana.diffusers import GaudiFluxPipeline
 
             pipeline = GaudiFluxPipeline.from_pretrained(
+                args.model_name_or_path,
+                **kwargs,
+            )
+
+    elif qwen:
+        # QwenImage pipelines
+        if controlnet:
+            raise ValueError("QwenImage+ControlNet pipeline is not currenly supported")
+        elif inpainting:
+            raise ValueError("QwenImage Inpainting pipeline is not currenly supported")
+        else:
+            # Import Flux pipeline
+            from optimum.habana.diffusers import GaudiQwenImagePipeline
+
+            pipeline = GaudiQwenImagePipeline.from_pretrained(
                 args.model_name_or_path,
                 **kwargs,
             )
